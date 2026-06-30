@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.DS_Store
+.claude/
+.env.example
+API_GUIDE.md
+PLAN.md
+VIDEO_SCRIPT.md
