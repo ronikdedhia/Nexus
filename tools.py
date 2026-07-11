@@ -158,3 +158,15 @@ def apply_leave(identifier: str, days: int) -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@tool
+def list_departments() -> list:
+    """List all unique departments with their employee counts."""
+    try:
+        result = execute(
+            "SELECT department, COUNT(*) as employee_count FROM employees GROUP BY department ORDER BY department"
+        )
+        return rows_to_dicts(result)
+    except Exception as e:
+        return [{"error": str(e)}]

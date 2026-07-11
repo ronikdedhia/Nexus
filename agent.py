@@ -12,6 +12,7 @@ from tools import (
     list_open_tickets,
     get_org_chart,
     apply_leave,
+    list_departments,
 )
 from rag import rag_search
 from metrics import record_agent_call, record_tool_call
@@ -20,7 +21,7 @@ SYSTEM_PROMPT = """You are Nexus, an enterprise AI assistant. You help employees
 - HR queries: leave policy, reimbursements, benefits, employee info, applying leave
 - IT support: raising tickets, listing open tickets, common troubleshooting
 - Business reports and company-wide stats
-- Org structure: who reports to whom
+- Org structure: who reports to whom, list of departments
 
 Rules:
 - Use the available tools to fetch real data or take actions — do not guess.
@@ -52,6 +53,7 @@ def get_agent():
             list_open_tickets,
             get_org_chart,
             apply_leave,
+            list_departments,
         ],
         system_prompt=SYSTEM_PROMPT,
     )
