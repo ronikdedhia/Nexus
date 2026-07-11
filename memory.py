@@ -45,3 +45,22 @@ def save_history(session_id: str, history: list[BaseMessage]):
         r.setex(f"session:{session_id}", 1800, json.dumps(data))
     else:
         _local[session_id] = data
+
+
+def clear_history(session_id: str):
+    r = _get_redis()
+    if r:
+        r.delete(f"session:{session_id}")
+    else:
+        _local.pop(session_id, None)
+
+
+def ping() -> dict:
+    r = _get_redis()
+    if not r:
+        return {"status": "not_configured"}
+    try:
+        r.get("__nexus_health__")
+        return {"status": "up"}
+    except Exception as e:
+        return {"status": "down", "error": str(e)}

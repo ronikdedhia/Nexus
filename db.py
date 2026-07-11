@@ -54,6 +54,14 @@ def execute(sql: str, args: list[Any] = None) -> dict:
     return result["response"]["result"]
 
 
+def ping() -> dict:
+    try:
+        execute("SELECT 1")
+        return {"status": "up"}
+    except Exception as e:
+        return {"status": "down", "error": str(e)}
+
+
 def rows_to_dicts(result: dict) -> list[dict]:
     cols = [c["name"] for c in result.get("cols", [])]
     out = []
