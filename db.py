@@ -54,6 +54,36 @@ def execute(sql: str, args: list[Any] = None) -> dict:
     return result["response"]["result"]
 
 
+MIGRATIONS = [
+    "ALTER TABLE tickets ADD COLUMN department TEXT",
+    "ALTER TABLE tickets ADD COLUMN resolved_by_kb INTEGER DEFAULT 0",
+    """CREATE TABLE IF NOT EXISTS leave_requests (
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        employee_name TEXT,
+        days INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        requested_at TEXT,
+        decided_at TEXT,
+        decided_by TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS metrics_counters (
+        name TEXT PRIMARY KEY,
+        value INTEGER DEFAULT 0
+    )""",
+]
+
+
+def migrate():
+    """Idempotent schema catch-up for already-seeded databases."""
+    for stmt in MIGRATIONS:
+        try:
+            execute(stmt)
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+
+
 def ping() -> dict:
     try:
         execute("SELECT 1")

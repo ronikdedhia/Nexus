@@ -48,4 +48,8 @@ export const api = {
     }),
 
   stats: () => request("/stats"),
+
+  roiStats: () => request("/stats/roi"),
+
+  ticketsByPriority: () => request("/stats/tickets-by-priority"),
 };

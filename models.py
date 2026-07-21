@@ -39,3 +39,17 @@ class ReportCreate(BaseModel):
 class TicketCommentCreate(BaseModel):
     author: str
     comment: str
+
+
+class MeetingTranscript(BaseModel):
+    transcript: str = Field(..., min_length=1)
+
+
+class MarketingContentRequest(BaseModel):
+    topic: str = Field(..., min_length=1)
+    content_format: str = "social post"
+
+
+class RagDocumentCreate(BaseModel):
+    text: str = Field(..., min_length=1)
+    source: str = Field(..., min_length=1)

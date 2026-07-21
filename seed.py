@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from db import execute
+from db import execute, migrate
 from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.documents import Document
@@ -28,7 +28,9 @@ DDL = [
         description TEXT,
         priority TEXT,
         status TEXT,
-        created_at TEXT
+        created_at TEXT,
+        department TEXT,
+        resolved_by_kb INTEGER DEFAULT 0
     )""",
     """CREATE TABLE IF NOT EXISTS reports (
         id TEXT PRIMARY KEY,
@@ -49,6 +51,16 @@ DDL = [
         author TEXT NOT NULL,
         comment TEXT NOT NULL,
         created_at TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS leave_requests (
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        employee_name TEXT,
+        days INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        requested_at TEXT,
+        decided_at TEXT,
+        decided_by TEXT
     )""",
 ]
 
@@ -87,6 +99,14 @@ REPORTS = [
 print("Creating Turso tables...")
 for ddl in DDL:
     execute(ddl)
+
+print("Applying migrations...")
+for stmt in MIGRATIONS:
+    try:
+        execute(stmt)
+    except Exception as e:
+        if "duplicate column" not in str(e).lower():
+            raise
 
 print("Seeding employees...")
 for emp in EMPLOYEES:

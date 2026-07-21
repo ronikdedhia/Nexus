@@ -10,3 +10,5 @@ upstash-redis
 requests
 pydantic
 python-dotenv
+apscheduler
+pypdf

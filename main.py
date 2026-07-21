@@ -1,6 +1,8 @@
 import os
 import io
 import csv
+import hmac
+import hashlib
 import time
 import uuid
 import logging
@@ -14,17 +16,28 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage, AIMessage
 
-from models import AskRequest, AskResponse, ErrorResponse, TicketStatusUpdate, EmployeeUpdate, ReportCreate, TicketCommentCreate
+from models import (
+    AskRequest, AskResponse, ErrorResponse, TicketStatusUpdate, EmployeeUpdate,
+    ReportCreate, TicketCommentCreate, MeetingTranscript, MarketingContentRequest, RagDocumentCreate,
+)
 from agent import run_agent
 from memory import load_history, save_history, clear_history, ping as memory_ping
-from db import execute, rows_to_dicts, ping as db_ping
-from rag import search_with_scores, list_sources, ping as rag_ping
-from metrics import record_request, render_prometheus
-from tools import log_ticket_event
+from db import execute, rows_to_dicts, ping as db_ping, migrate as db_migrate
+from rag import search_with_scores, list_sources, add_document, delete_by_source, ping as rag_ping
+from metrics import record_request, render_prometheus, get_roi_stats, load_persisted as load_persisted_metrics
+from tools import (
+    log_ticket_event, check_sla_breaches, decide_leave_request,
+    summarize_meeting, generate_marketing_content, get_digest,
+    _hours_since, SLA_HOURS,
+)
+from integrations import handle_slack_event
+from scheduler import start_scheduler, stop_scheduler
+
+SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
 
 VALID_TICKET_STATUSES = {"open", "in_progress", "closed"}
 
@@ -62,7 +75,14 @@ async def lifespan(app: FastAPI):
     # warm up agent on startup (loads Groq client + tool schemas)
     from agent import get_agent
     get_agent()
+    try:
+        db_migrate()
+    except Exception as e:
+        logger.warning(f"Startup migration skipped: {e}")
+    load_persisted_metrics()
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 app = FastAPI(
@@ -276,6 +296,21 @@ async def export_tickets():
     return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=tickets.csv"})
 
 
+@app.get("/tickets/sla-breaches")
+async def get_sla_breaches():
+    rows = rows_to_dicts(await run_in_threadpool(
+        execute, "SELECT id, title, priority, created_at FROM tickets WHERE status = 'open' AND priority != 'high'"
+    ))
+    breaching = [r for r in rows if r.get("created_at") and _hours_since(r["created_at"]) >= SLA_HOURS]
+    return {"sla_hours": SLA_HOURS, "breaching": breaching}
+
+
+@app.post("/tickets/sla-breaches/escalate")
+async def run_sla_escalation():
+    escalated = await run_in_threadpool(check_sla_breaches)
+    return {"escalated": escalated}
+
+
 @app.get("/tickets/{ticket_id}")
 async def get_ticket(ticket_id: str):
     rows = rows_to_dicts(await run_in_threadpool(
@@ -446,3 +481,111 @@ async def rag_sources_endpoint():
     except Exception as e:
         raise HTTPException(status_code=503, detail={"error": str(e), "code": "RAG_UNAVAILABLE"})
     return {"sources": sources}
+
+
+@app.post("/rag/documents")
+async def add_rag_document(body: RagDocumentCreate):
+    try:
+        result = await run_in_threadpool(add_document, body.text, body.source)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"error": str(e), "code": "RAG_UNAVAILABLE"})
+    return result
+
+
+@app.delete("/rag/documents/{source}")
+async def delete_rag_document(source: str):
+    try:
+        result = await run_in_threadpool(delete_by_source, source)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"error": str(e), "code": "RAG_UNAVAILABLE"})
+    return result
+
+
+# ── Leave approval workflow ─────────────────────────────────────────────────
+
+@app.get("/leave-requests")
+async def list_leave_requests(status: Optional[str] = Query(None)):
+    if status:
+        result = await run_in_threadpool(
+            execute, "SELECT * FROM leave_requests WHERE status = ? ORDER BY requested_at DESC", [status]
+        )
+    else:
+        result = await run_in_threadpool(execute, "SELECT * FROM leave_requests ORDER BY requested_at DESC")
+    return rows_to_dicts(result)
+
+
+@app.post("/leave-requests/{request_id}/approve")
+async def approve_leave_request(request_id: str):
+    result = await run_in_threadpool(decide_leave_request, request_id, True, "manager")
+    if "error" in result:
+        raise HTTPException(status_code=400, detail={"error": result["error"], "code": "LEAVE_REQUEST_ERROR"})
+    return result
+
+
+@app.post("/leave-requests/{request_id}/reject")
+async def reject_leave_request(request_id: str):
+    result = await run_in_threadpool(decide_leave_request, request_id, False, "manager")
+    if "error" in result:
+        raise HTTPException(status_code=400, detail={"error": result["error"], "code": "LEAVE_REQUEST_ERROR"})
+    return result
+
+
+# ── ROI / digest ─────────────────────────────────────────────────────────────
+
+@app.get("/stats/roi")
+async def stats_roi():
+    return get_roi_stats()
+
+
+@app.get("/digest/{identifier}")
+async def digest_endpoint(identifier: str):
+    result = await run_in_threadpool(get_digest.invoke, {"identifier": identifier})
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=404, detail={"error": result["error"], "code": "NOT_FOUND"})
+    return result
+
+
+# ── Meeting summarizer / marketing content ──────────────────────────────────
+
+@app.post("/meetings/summarize")
+async def summarize_meeting_endpoint(body: MeetingTranscript):
+    result = await run_in_threadpool(summarize_meeting.invoke, {"transcript": body.transcript})
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=502, detail={"error": result["error"], "code": "SUMMARIZE_ERROR"})
+    return result
+
+
+@app.post("/marketing/generate")
+async def generate_marketing_content_endpoint(body: MarketingContentRequest):
+    result = await run_in_threadpool(
+        generate_marketing_content.invoke, {"topic": body.topic, "content_format": body.content_format}
+    )
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=502, detail={"error": result["error"], "code": "MARKETING_GEN_ERROR"})
+    return result
+
+
+# ── Slack integration ────────────────────────────────────────────────────────
+
+def _verify_slack_signature(request: Request, raw_body: bytes) -> bool:
+    if not SLACK_SIGNING_SECRET:
+        return True
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+    if not timestamp or not signature:
+        return False
+    if abs(time.time() - int(timestamp)) > 60 * 5:
+        return False
+    basestring = f"v0:{timestamp}:{raw_body.decode()}"
+    computed = "v0=" + hmac.new(SLACK_SIGNING_SECRET.encode(), basestring.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, signature)
+
+
+@app.post("/slack/events")
+async def slack_events(request: Request):
+    raw_body = await request.body()
+    if not _verify_slack_signature(request, raw_body):
+        return JSONResponse(status_code=401, content={"error": "invalid Slack signature"})
+    payload = await request.json()
+    result = await run_in_threadpool(handle_slack_event, payload)
+    return result

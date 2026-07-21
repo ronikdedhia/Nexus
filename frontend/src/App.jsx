@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import Chat from "./components/Chat";
 import Employees from "./components/Employees";
 import Tickets from "./components/Tickets";
+import Roi from "./components/Roi";
 import { api } from "./api";
 import "./App.css";
 
@@ -9,6 +10,7 @@ const TABS = [
   { key: "chat", label: "Chat" },
   { key: "employees", label: "Employees" },
   { key: "tickets", label: "Tickets" },
+  { key: "roi", label: "ROI" },
 ];
 
 function StatsBar() {
@@ -56,6 +58,7 @@ function App() {
         {tab === "chat" && <Chat />}
         {tab === "employees" && <Employees />}
         {tab === "tickets" && <Tickets />}
+        {tab === "roi" && <Roi />}
       </main>
     </div>
   );
