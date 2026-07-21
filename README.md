@@ -1,5 +1,7 @@
 # Nexus — Enterprise AI Assistant
 
+🔴 **[Live demo](https://nexus-ten-murex.vercel.app/)**
+
 FastAPI backend that lets employees query HR policies, look up colleagues, raise IT tickets, pull business reports, get leave approved, summarize meetings, and draft on-brand marketing content — all via a single chat endpoint, plus a full REST API and a Slack integration.
 
 ## What it does
