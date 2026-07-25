@@ -76,6 +76,7 @@ export default function Tickets() {
 
   return (
     <div className="panel">
+      <p className="chat-empty">To create a ticket, type your request in the Chat tab.</p>
       <div className="panel-controls">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="">All statuses</option>

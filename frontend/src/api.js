@@ -21,13 +21,6 @@ export const api = {
       body: JSON.stringify({ question, session_id: sessionId }),
     }),
 
-  listEmployees: (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
-    return request(`/employees${qs ? `?${qs}` : ""}`);
-  },
-
-  listDepartments: () => request("/departments"),
-
   listTickets: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return request(`/tickets${qs ? `?${qs}` : ""}`);
@@ -46,10 +39,4 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ author, comment }),
     }),
-
-  stats: () => request("/stats"),
-
-  roiStats: () => request("/stats/roi"),
-
-  ticketsByPriority: () => request("/stats/tickets-by-priority"),
 };

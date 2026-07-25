@@ -429,16 +429,13 @@ async def export_reports(report_type: str):
 
 @app.get("/stats")
 async def stats():
-    employees = rows_to_dicts(await run_in_threadpool(execute, "SELECT leave_balance FROM employees"))
+    employees = rows_to_dicts(await run_in_threadpool(execute, "SELECT id FROM employees"))
     open_tickets = rows_to_dicts(await run_in_threadpool(execute, "SELECT id FROM tickets WHERE status = 'open'"))
     all_tickets = rows_to_dicts(await run_in_threadpool(execute, "SELECT id FROM tickets"))
-    balances = [int(e["leave_balance"]) for e in employees if e["leave_balance"] is not None]
-    avg_leave = round(sum(balances) / len(balances), 1) if balances else 0
     return {
         "total_employees": len(employees),
         "open_tickets": len(open_tickets),
         "total_tickets": len(all_tickets),
-        "avg_leave_balance": avg_leave,
     }
 
 
