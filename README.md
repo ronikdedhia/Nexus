@@ -206,6 +206,30 @@ Every route except the public ones needs a key. **admin** marks routes that need
 
 **CI**: `.github/workflows/ci.yml` runs the backend tests and the frontend lint and build on every push and pull request.
 
+### Deploy checklist
+
+1. Generate two keys. Run `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` twice: the first is the user key, the second the admin key.
+2. **Vercel:** set `VITE_API_KEY` to the user key, then redeploy. Vercel warns that `VITE_` values are exposed to the browser. That's expected for the user key, so choose type **Config**. A **Secret** also works, but you can't read it afterwards or convert it to Config.
+3. **Render:** set `NEXUS_API_KEY` (the same user key), `NEXUS_ADMIN_API_KEY`, `CORS_ORIGINS` and `NEXUS_ENABLE_SCHEDULER=false`, then choose "Save, rebuild, and deploy".
+4. **GitHub:** add the repository secrets `NEXUS_URL` and `NEXUS_ADMIN_API_KEY` (the same admin key as Render).
+5. Verify:
+   ```bash
+   curl https://<backend>/health                                   # 200, no key needed
+   curl -H "X-API-Key: <user key>" https://<backend>/version       # shows the deployed commit
+   curl -H "X-API-Key: <user key>" https://<backend>/leave-requests  # 403: user key can't use admin routes
+   ```
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Render deploy fails, log shows `RuntimeError: No API key configured` | The server won't start without a key | Set `NEXUS_API_KEY` / `NEXUS_ADMIN_API_KEY` on Render. The previous version keeps serving until a deploy succeeds |
+| Website shows "isn't authorised to reach the server" | `VITE_API_KEY` is missing, wrong, or doesn't match `NEXUS_API_KEY` | Fix the value in Vercel and **redeploy**, since the key is baked in at build time |
+| Browser console shows a CORS error | The site's origin isn't in `CORS_ORIGINS` | Add the exact origin (scheme + domain, no trailing slash) on Render |
+| Chat returns `AGENT_ERROR` | Usually Groq: a bad key or a retired model | Check the Render log for the request ID shown in the error. For a retired model, set `GROQ_MODEL` |
+| `ops-cron` fails with 403 | The GitHub `NEXUS_ADMIN_API_KEY` differs from Render's | Paste the same admin key into both |
+| First message takes up to a minute | The free Render plan sleeps when idle | Expected. Upgrade the plan or ping `/health` on a schedule to keep it awake |
+
 ## Changelog
 
 **1.1.0**
