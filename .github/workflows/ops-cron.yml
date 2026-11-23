@@ -31,7 +31,9 @@ jobs:
       - name: SLA sweep
         if: steps.check.outputs.configured == 'true'
         # --max-time 120 covers a sleeping host's cold start
-        run: curl -fsS --max-time 120 -X POST -H "X-API-Key: $NEXUS_ADMIN_API_KEY" "$NEXUS_URL/tickets/sla-breaches/escalate"
+        run: |
+          curl -fsS --max-time 120 -X POST -H "X-API-Key: $NEXUS_ADMIN_API_KEY" "$NEXUS_URL/tickets/sla-breaches/escalate"
       - name: Daily digest
         if: steps.check.outputs.configured == 'true' && (github.event.schedule == '0 9 * * *' || github.event_name == 'workflow_dispatch')
-        run: curl -fsS --max-time 120 -X POST -H "X-API-Key: $NEXUS_ADMIN_API_KEY" "$NEXUS_URL/ops/digest"
+        run: |
+          curl -fsS --max-time 120 -X POST -H "X-API-Key: $NEXUS_ADMIN_API_KEY" "$NEXUS_URL/ops/digest"
