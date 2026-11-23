@@ -1,0 +1,34 @@
+# Render Blueprint for the backend. Only used when you create the service from this file
+# (Render dashboard > New > Blueprint). An existing service keeps its dashboard settings.
+services:
+  - type: web
+    name: nexus
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TURSO_URL
+        sync: false
+      - key: TURSO_TOKEN
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: NEXUS_API_KEY
+        generateValue: true
+      - key: NEXUS_ADMIN_API_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      # The free plan sleeps when idle, so the in-process scheduler can't be relied on.
+      # .github/workflows/ops-cron.yml runs the jobs instead.
+      - key: NEXUS_ENABLE_SCHEDULER
+        value: "false"

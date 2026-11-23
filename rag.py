@@ -1,7 +1,7 @@
 import os
 import time
 from langchain_qdrant import QdrantVectorStore
-from langchain_community.embeddings import FastEmbedEmbeddings
+from embeddings import FastEmbedEmbeddings
 from langchain_core.tools import tool
 from langchain_core.documents import Document
 from qdrant_client.http import models as qmodels
@@ -16,7 +16,7 @@ SOURCES_CACHE_TTL = 300
 def _get_store() -> QdrantVectorStore:
     global _store
     if _store is None:
-        embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        embeddings = FastEmbedEmbeddings()
         _store = QdrantVectorStore.from_existing_collection(
             embedding=embeddings,
             collection_name="nexus_docs",

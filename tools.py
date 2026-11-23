@@ -12,7 +12,6 @@ from metrics import (
     record_ticket_created,
     record_ticket_auto_resolved,
     record_ticket_escalated,
-    record_marketing_content_generated,
 )
 
 def _get_util_llm(temperature: float = 0.2):
@@ -384,32 +383,6 @@ def summarize_meeting(transcript: str) -> dict:
             "summary": summary,
             "decisions": _lines(decisions_raw),
             "action_items": _lines(actions_raw),
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@tool
-def generate_marketing_content(topic: str, content_format: str = "social post") -> dict:
-    """Draft marketing content (social post, ad copy, email, or campaign blurb) for a topic,
-    grounded in the company's brand guidelines and campaign policy from the knowledge base."""
-    try:
-        grounding = search_with_scores(f"marketing brand guidelines {topic}", k=3)
-        context = "\n".join(f"[{g['source']}] {g['content']}" for g in grounding) or "No brand guidelines found."
-        prompt = (
-            f"Draft a {content_format} about: {topic}\n\n"
-            f"Follow these brand guidelines strictly (tone, colors, approval rules mentioned):\n{context}\n\n"
-            "Keep it concise, on-brand, and ready to use. Do not invent statistics or claims."
-        )
-        response = _get_util_llm(temperature=0.5).invoke([
-            SystemMessage(content="You are FlexiLoans' marketing copywriter. Stay on-brand and factual."),
-            HumanMessage(content=prompt),
-        ])
-        record_marketing_content_generated()
-        return {
-            "content": response.content,
-            "format": content_format,
-            "grounded_on": sorted({g["source"] for g in grounding}),
         }
     except Exception as e:
         return {"error": str(e)}

@@ -22,7 +22,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from models import (
     AskRequest, AskResponse, ErrorResponse, TicketStatusUpdate, EmployeeUpdate,
-    ReportCreate, TicketCommentCreate, MeetingTranscript, MarketingContentRequest, RagDocumentCreate,
+    ReportCreate, TicketCommentCreate, MeetingTranscript, RagDocumentCreate,
 )
 from agent import run_agent
 from memory import load_history, save_history, clear_history, ping as memory_ping
@@ -31,10 +31,11 @@ from rag import search_with_scores, list_sources, add_document, delete_by_source
 from metrics import record_request, render_prometheus, get_roi_stats, load_persisted as load_persisted_metrics
 from tools import (
     log_ticket_event, decide_leave_request,
-    summarize_meeting, generate_marketing_content, get_digest,
+    summarize_meeting, get_digest,
     _hours_since, SLA_HOURS, report_period_key,
 )
 from integrations import handle_slack_event, should_process_slack_event
+from ratelimit import limit_llm_calls
 from scheduler import start_scheduler, stop_scheduler, run_daily_digest, run_sla_sweep
 
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
@@ -180,7 +181,7 @@ app.add_middleware(
 )
 
 
-@app.post("/ask", response_model=AskResponse)
+@app.post("/ask", response_model=AskResponse, dependencies=[Depends(limit_llm_calls)])
 async def ask(req: AskRequest, request: Request):
     session_id = req.session_id or str(uuid.uuid4())
 
@@ -593,23 +594,13 @@ async def digest_endpoint(identifier: str):
     return result
 
 
-# ── Meeting summarizer / marketing content ──────────────────────────────────
+# ── Meeting summarizer ────────────────────────────────────────────────
 
-@app.post("/meetings/summarize")
+@app.post("/meetings/summarize", dependencies=[Depends(limit_llm_calls)])
 async def summarize_meeting_endpoint(body: MeetingTranscript, request: Request):
     result = await run_in_threadpool(summarize_meeting.invoke, {"transcript": body.transcript})
     if isinstance(result, dict) and "error" in result:
         raise _internal_error(request, 502, "SUMMARIZE_ERROR", "Meeting summary failed. Please try again.", RuntimeError(result["error"]))
-    return result
-
-
-@app.post("/marketing/generate")
-async def generate_marketing_content_endpoint(body: MarketingContentRequest, request: Request):
-    result = await run_in_threadpool(
-        generate_marketing_content.invoke, {"topic": body.topic, "content_format": body.content_format}
-    )
-    if isinstance(result, dict) and "error" in result:
-        raise _internal_error(request, 502, "MARKETING_GEN_ERROR", "Content generation failed. Please try again.", RuntimeError(result["error"]))
     return result
 
 

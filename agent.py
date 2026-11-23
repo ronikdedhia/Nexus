@@ -12,7 +12,6 @@ from tools import (
     apply_leave,
     list_departments,
     summarize_meeting,
-    generate_marketing_content,
     get_digest,
 )
 from rag import rag_search
@@ -26,7 +25,6 @@ SYSTEM_PROMPT = """You are Nexus, an enterprise AI assistant. You help employees
 - Org structure: who reports to whom, list of departments
 - Personal daily digests (leave balance, pending requests, company ticket load)
 - Summarizing meeting transcripts into decisions and action items
-- Drafting on-brand marketing content (social posts, ad copy, campaign blurbs)
 
 Rules:
 - Use the available tools to fetch real data or take actions — do not guess.
@@ -70,7 +68,6 @@ def get_agent():
             apply_leave,
             list_departments,
             summarize_meeting,
-            generate_marketing_content,
             get_digest,
         ],
         system_prompt=SYSTEM_PROMPT,

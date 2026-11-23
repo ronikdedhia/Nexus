@@ -48,11 +48,6 @@ class MeetingTranscript(BaseModel):
     transcript: str = Field(..., min_length=1, max_length=60_000)
 
 
-class MarketingContentRequest(BaseModel):
-    topic: str = Field(..., min_length=1, max_length=1_000)
-    content_format: str = Field("social post", max_length=100)
-
-
 class RagDocumentCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=200_000)
     source: str = Field(..., min_length=1, max_length=200)

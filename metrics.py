@@ -10,7 +10,6 @@ _tickets_created_total = 0
 _tickets_auto_resolved_total = 0
 _tickets_escalated_total = 0
 _digests_sent_total = 0
-_marketing_content_generated_total = 0
 
 
 def record_request(path: str):
@@ -48,7 +47,7 @@ def _persist(name: str, value: int):
 def load_persisted():
     """Hydrate in-memory ROI counters from Turso — call once at startup."""
     global _tickets_created_total, _tickets_auto_resolved_total, _tickets_escalated_total
-    global _digests_sent_total, _marketing_content_generated_total
+    global _digests_sent_total
     try:
         from db import execute, rows_to_dicts
         values = {r["name"]: int(r["value"]) for r in rows_to_dicts(execute("SELECT name, value FROM metrics_counters"))}
@@ -59,7 +58,6 @@ def load_persisted():
         _tickets_auto_resolved_total = values.get("tickets_auto_resolved", _tickets_auto_resolved_total)
         _tickets_escalated_total = values.get("tickets_escalated", _tickets_escalated_total)
         _digests_sent_total = values.get("digests_sent", _digests_sent_total)
-        _marketing_content_generated_total = values.get("marketing_content_generated", _marketing_content_generated_total)
 
 
 def record_ticket_created():
@@ -94,21 +92,12 @@ def record_digest_sent():
     _persist("digests_sent", value)
 
 
-def record_marketing_content_generated():
-    global _marketing_content_generated_total
-    with _lock:
-        _marketing_content_generated_total += 1
-        value = _marketing_content_generated_total
-    _persist("marketing_content_generated", value)
-
-
 def get_roi_stats(avg_minutes_saved_per_auto_resolve: int = 10) -> dict:
     with _lock:
         created = _tickets_created_total
         auto_resolved = _tickets_auto_resolved_total
         escalated = _tickets_escalated_total
         digests = _digests_sent_total
-        marketing = _marketing_content_generated_total
     total_seen = created + auto_resolved
     deflection_rate = round(auto_resolved / total_seen, 3) if total_seen else 0.0
     return {
@@ -118,7 +107,6 @@ def get_roi_stats(avg_minutes_saved_per_auto_resolve: int = 10) -> dict:
         "deflection_rate": deflection_rate,
         "estimated_minutes_saved": auto_resolved * avg_minutes_saved_per_auto_resolve,
         "digests_sent": digests,
-        "marketing_content_generated": marketing,
     }
 
 
@@ -155,8 +143,5 @@ def render_prometheus() -> str:
             "# HELP nexus_digests_sent_total Ops digests sent",
             "# TYPE nexus_digests_sent_total counter",
             f"nexus_digests_sent_total {_digests_sent_total}",
-            "# HELP nexus_marketing_content_generated_total Marketing content drafts generated",
-            "# TYPE nexus_marketing_content_generated_total counter",
-            f"nexus_marketing_content_generated_total {_marketing_content_generated_total}",
         ]
     return "\n".join(lines) + "\n"

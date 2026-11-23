@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import integrations
 import main
+import ratelimit
 
 USER, ADMIN = "user-key", "admin-key"
 ORIGIN = "http://localhost:5173"
@@ -18,6 +19,7 @@ def client(fake_db, monkeypatch):
     monkeypatch.setattr(main, "API_KEY", USER)
     monkeypatch.setattr(main, "ADMIN_API_KEY", ADMIN)
     monkeypatch.setattr(main, "AUTH_DISABLED", False)
+    ratelimit.reset()
     # No `with`: skip lifespan (it would build a real Groq client and start the scheduler).
     return TestClient(main.app, raise_server_exceptions=False)
 
@@ -119,6 +121,20 @@ def test_ask_error_does_not_leak_internals(client, monkeypatch):
     assert "secret-internal-detail" not in r.text
     assert r.json()["detail"]["code"] == "AGENT_ERROR"
     assert r.json()["detail"]["request_id"] == r.headers["X-Request-ID"]
+
+
+def test_ask_is_rate_limited_per_client(client, monkeypatch):
+    monkeypatch.setattr(main, "run_agent", lambda q, h: {"answer": "ok"})
+    monkeypatch.setattr(ratelimit, "LLM_RATE_LIMIT_PER_MINUTE", 3)
+    a = {**h(USER), "X-Forwarded-For": "1.1.1.1"}
+    b = {**h(USER), "X-Forwarded-For": "2.2.2.2"}
+    codes = [client.post("/ask", json={"question": "q"}, headers=a).status_code for _ in range(4)]
+    assert codes == [200, 200, 200, 429]
+    assert client.post("/ask", json={"question": "q"}, headers=b).status_code == 200
+
+
+def test_marketing_route_removed(client):
+    assert client.post("/marketing/generate", json={"topic": "x"}, headers=h(USER)).status_code == 404
 
 
 def test_ask_rejects_oversized_question(client):

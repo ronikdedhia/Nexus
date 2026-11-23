@@ -39,8 +39,8 @@ def test_seed_runs_end_to_end_without_wiping_qdrant(fake_db, monkeypatch):
             captured["docs"], captured["kwargs"] = docs, kwargs
 
     monkeypatch.setitem(sys.modules, "langchain_qdrant", types.SimpleNamespace(QdrantVectorStore=FakeStore))
-    import langchain_community.embeddings as emb
-    monkeypatch.setattr(emb, "FastEmbedEmbeddings", lambda **kw: object())
+    import embeddings
+    monkeypatch.setattr(embeddings, "FastEmbedEmbeddings", lambda **kw: object())
 
     runpy.run_path(str(__import__("pathlib").Path(db.__file__).with_name("seed.py")), run_name="__main__")
 

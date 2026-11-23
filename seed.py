@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from db import execute, migrate
-from langchain_community.embeddings import FastEmbedEmbeddings
+from embeddings import FastEmbedEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.documents import Document
 
@@ -87,7 +87,7 @@ FAQ_DOCS = [
 ]
 
 print("Embedding docs into Qdrant...")
-embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+embeddings = FastEmbedEmbeddings()
 # Stable IDs per seed doc: re-running overwrites these points in place instead of duplicating them,
 # and the collection is no longer recreated, so documents added via ingest_docs.py or the API survive.
 seed_ids = [
