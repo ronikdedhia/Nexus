@@ -1,10 +1,12 @@
 import os
+import re
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
-from db import execute, rows_to_dicts
+from db import execute, rows_to_dicts, affected_rows
+from llm import get_llm
 from rag import best_match, search_with_scores
 from metrics import (
     record_ticket_created,
@@ -13,14 +15,8 @@ from metrics import (
     record_marketing_content_generated,
 )
 
-_util_llm = None
-
-
-def _get_util_llm(temperature: float = 0.2) -> ChatGroq:
-    global _util_llm
-    if _util_llm is None:
-        _util_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=temperature, api_key=os.getenv("GROQ_API_KEY"))
-    return _util_llm
+def _get_util_llm(temperature: float = 0.2):
+    return get_llm(temperature)
 
 
 URGENT_KEYWORDS = ("urgent", "asap", "critical", "down", "outage", "blocked", "immediately")
@@ -46,6 +42,46 @@ def classify_department(text: str) -> str:
         if any(k in text for k in keywords):
             return dept
     return "IT"
+
+
+def _like_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def resolve_employee(identifier: str, columns: str = "*") -> tuple[Optional[dict], Optional[str]]:
+    """Find exactly one employee by ID or name. Returns (employee, None) or (None, error).
+
+    Exact ID / exact name wins. Otherwise a partial name match (3+ characters) is used only when it is
+    unique, so "Priya" with two Priyas returns an "ambiguous" error instead of silently picking one."""
+    ident = (identifier or "").strip()
+    if not ident:
+        return None, "An employee ID or name is required"
+    exact = rows_to_dicts(execute(
+        f"SELECT {columns} FROM employees WHERE UPPER(id) = UPPER(?) OR LOWER(name) = LOWER(?) LIMIT 2",
+        [ident, ident],
+    ))
+    if len(exact) == 1:
+        return exact[0], None
+    if not exact and len(ident) < 3:
+        return None, f"'{ident}' is too short to match a name. Use the employee ID or more of the name."
+    partial = exact or rows_to_dicts(execute(
+        f"SELECT {columns} FROM employees WHERE name LIKE ? ESCAPE '\\' ORDER BY id LIMIT 6",
+        [f"%{_like_escape(ident)}%"],
+    ))
+    if not partial:
+        return None, f"No employee found matching '{ident}'"
+    if len(partial) == 1:
+        return partial[0], None
+    names = ", ".join(f"{e.get('name')} ({e.get('id')})" for e in partial[:5] if "name" in e) or "several employees"
+    return None, f"'{ident}' matches more than one employee: {names}. Ask the user which one they mean."
+
+
+def report_period_key(period: str):
+    """Sort key for periods like 'Q2 2025' (chronological, unlike plain string sort)."""
+    m = re.search(r"Q([1-4])\s*(\d{4})", period or "", re.IGNORECASE)
+    if m:
+        return (int(m.group(2)), int(m.group(1)), "")
+    return (0, 0, period or "")
 
 
 def log_ticket_event(ticket_id: str, status: str, note: str = None):
@@ -108,30 +144,32 @@ def create_ticket(title: str, description: str, priority: str = "medium", force_
 def get_employee(identifier: str) -> dict:
     """Get employee info by employee ID (e.g. EMP001) or by name."""
     try:
-        result = execute(
-            "SELECT * FROM employees WHERE id = ? OR name LIKE ? LIMIT 1",
-            [identifier, f"%{identifier}%"],
-        )
-        rows = rows_to_dicts(result)
-        if not rows:
-            return {"error": f"No employee found matching '{identifier}'"}
-        return rows[0]
+        emp, err = resolve_employee(identifier)
+        return {"error": err} if err else emp
     except Exception as e:
         return {"error": str(e)}
 
 
 @tool
-def generate_report(report_type: str) -> dict:
-    """Fetch a business report summary. Valid types: sales, hr, it."""
+def generate_report(report_type: str, period: Optional[str] = None) -> dict:
+    """Fetch a business report summary. Valid types: sales, hr, it.
+    period is optional, e.g. 'Q1 2025'. Without it, the most recent period is returned.
+    The response lists all available_periods so you can fetch others for comparisons."""
     try:
-        result = execute(
-            "SELECT * FROM reports WHERE type = ? LIMIT 1",
-            [report_type.lower()],
-        )
-        rows = rows_to_dicts(result)
+        rows = rows_to_dicts(execute("SELECT * FROM reports WHERE type = ?", [report_type.lower()]))
         if not rows:
             return {"error": f"No report found for type '{report_type}'. Valid: sales, hr, it"}
-        return rows[0]
+        rows.sort(key=lambda r: report_period_key(r.get("period")))
+        available = [r["period"] for r in rows]
+        if period:
+            wanted = report_period_key(period)
+            match = [r for r in rows if report_period_key(r.get("period")) == wanted]
+            if not match:
+                return {"error": f"No {report_type} report for period '{period}'", "available_periods": available}
+            report = match[0]
+        else:
+            report = rows[-1]
+        return {**report, "available_periods": available}
     except Exception as e:
         return {"error": str(e)}
 
@@ -170,14 +208,10 @@ def list_open_tickets() -> list:
 def get_org_chart(identifier: str) -> dict:
     """Get an employee's direct reports by employee ID (e.g. EMP001) or name."""
     try:
-        emp_result = execute(
-            "SELECT id, name FROM employees WHERE id = ? OR name LIKE ? LIMIT 1",
-            [identifier, f"%{identifier}%"],
-        )
-        emp_rows = rows_to_dicts(emp_result)
-        if not emp_rows:
-            return {"error": f"No employee found matching '{identifier}'"}
-        manager_name = emp_rows[0]["name"]
+        emp, err = resolve_employee(identifier, "id, name")
+        if err:
+            return {"error": err}
+        manager_name = emp["name"]
         reports = rows_to_dicts(execute(
             "SELECT id, name, role, department FROM employees WHERE manager = ?",
             [manager_name],
@@ -196,17 +230,12 @@ def apply_leave(identifier: str, days: int) -> dict:
     Requests of AUTO_APPROVE_LEAVE_DAYS (default 2) or fewer are auto-approved and deducted immediately;
     longer requests are created as pending and need a manager decision via /leave-requests/{id}/approve."""
     try:
-        emp_result = execute(
-            "SELECT id, name, leave_balance FROM employees WHERE id = ? OR name LIKE ? LIMIT 1",
-            [identifier, f"%{identifier}%"],
-        )
-        emp_rows = rows_to_dicts(emp_result)
-        if not emp_rows:
-            return {"error": f"No employee found matching '{identifier}'"}
-        emp = emp_rows[0]
-        current_balance = int(emp["leave_balance"])
         if days <= 0:
             return {"error": "days must be a positive number"}
+        emp, err = resolve_employee(identifier, "id, name, leave_balance")
+        if err:
+            return {"error": err}
+        current_balance = int(emp["leave_balance"] or 0)
         if days > current_balance:
             return {"error": f"Insufficient leave balance: {emp['name']} has {current_balance} days, requested {days}"}
 
@@ -214,13 +243,15 @@ def apply_leave(identifier: str, days: int) -> dict:
         requested_at = datetime.now(timezone.utc).isoformat()
 
         if days <= AUTO_APPROVE_LEAVE_DAYS:
-            new_balance = current_balance - days
-            execute("UPDATE employees SET leave_balance = ? WHERE id = ?", [new_balance, emp["id"]])
+            # Conditional decrement: a concurrent request can't push the balance below zero.
+            if not _deduct_leave(emp["id"], days):
+                return {"error": f"Insufficient leave balance for {emp['name']} (balance changed, please retry)"}
             execute(
                 "INSERT INTO leave_requests (id, employee_id, employee_name, days, status, requested_at, decided_at, decided_by) "
                 "VALUES (?, ?, ?, ?, 'approved', ?, ?, 'auto')",
                 [request_id, emp["id"], emp["name"], days, requested_at, requested_at],
             )
+            new_balance = _leave_balance(emp["id"])
             return {
                 "request_id": request_id,
                 "employee": emp["name"],
@@ -249,6 +280,19 @@ def apply_leave(identifier: str, days: int) -> dict:
         return {"error": str(e)}
 
 
+def _deduct_leave(employee_id: str, days: int) -> bool:
+    result = execute(
+        "UPDATE employees SET leave_balance = leave_balance - ? WHERE id = ? AND leave_balance >= ?",
+        [days, employee_id, days],
+    )
+    return affected_rows(result) == 1
+
+
+def _leave_balance(employee_id: str):
+    rows = rows_to_dicts(execute("SELECT leave_balance FROM employees WHERE id = ?", [employee_id]))
+    return rows[0]["leave_balance"] if rows else None
+
+
 def decide_leave_request(request_id: str, approve: bool, decided_by: str = "manager") -> dict:
     rows = rows_to_dicts(execute("SELECT * FROM leave_requests WHERE id = ?", [request_id]))
     if not rows:
@@ -260,20 +304,28 @@ def decide_leave_request(request_id: str, approve: bool, decided_by: str = "mana
     decided_at = datetime.now(timezone.utc).isoformat()
     new_status = "approved" if approve else "rejected"
 
-    if approve:
-        emp_rows = rows_to_dicts(execute("SELECT leave_balance FROM employees WHERE id = ?", [req["employee_id"]]))
-        if not emp_rows:
-            return {"error": f"Employee '{req['employee_id']}' no longer exists"}
-        current_balance = int(emp_rows[0]["leave_balance"])
-        days = int(req["days"])
-        if days > current_balance:
-            return {"error": f"Insufficient leave balance: has {current_balance} days, request is for {days}"}
-        execute("UPDATE employees SET leave_balance = ? WHERE id = ?", [current_balance - days, req["employee_id"]])
-
-    execute(
-        "UPDATE leave_requests SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?",
+    # Claim the request first (only one caller can move it out of 'pending'), so two
+    # simultaneous approvals can't both deduct the balance.
+    claimed = execute(
+        "UPDATE leave_requests SET status = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'",
         [new_status, decided_at, decided_by, request_id],
     )
+    if affected_rows(claimed) != 1:
+        return {"error": f"Leave request '{request_id}' was already decided"}
+
+    if approve:
+        days = int(req["days"])
+        if not _deduct_leave(req["employee_id"], days):
+            # Roll the claim back so a manager can retry once the balance is sorted out.
+            execute(
+                "UPDATE leave_requests SET status = 'pending', decided_at = NULL, decided_by = NULL WHERE id = ?",
+                [request_id],
+            )
+            balance = _leave_balance(req["employee_id"])
+            if balance is None:
+                return {"error": f"Employee '{req['employee_id']}' no longer exists"}
+            return {"error": f"Insufficient leave balance: has {balance} days, request is for {days}"}
+
     return {**req, "status": new_status, "decided_at": decided_at, "decided_by": decided_by}
 
 
@@ -368,13 +420,9 @@ def get_digest(identifier: str) -> dict:
     """Get a personal daily digest for an employee: leave balance, their pending leave requests,
     and company-wide open ticket counts by priority. identifier is employee ID or name."""
     try:
-        emp_rows = rows_to_dicts(execute(
-            "SELECT id, name, leave_balance FROM employees WHERE id = ? OR name LIKE ? LIMIT 1",
-            [identifier, f"%{identifier}%"],
-        ))
-        if not emp_rows:
-            return {"error": f"No employee found matching '{identifier}'"}
-        emp = emp_rows[0]
+        emp, err = resolve_employee(identifier, "id, name, leave_balance")
+        if err:
+            return {"error": err}
 
         pending_requests = rows_to_dicts(execute(
             "SELECT id, days, requested_at FROM leave_requests WHERE employee_id = ? AND status = 'pending'",
@@ -412,7 +460,14 @@ def check_sla_breaches() -> list:
             if not t.get("created_at"):
                 continue
             if _hours_since(t["created_at"]) >= SLA_HOURS:
-                execute("UPDATE tickets SET priority = 'high' WHERE id = ?", [t["id"]])
+                # Conditional update: if a second worker or an external cron sweeps at the same
+                # time, only one of them escalates (and logs/alerts for) each ticket.
+                result = execute(
+                    "UPDATE tickets SET priority = 'high' WHERE id = ? AND status = 'open' AND priority != 'high'",
+                    [t["id"]],
+                )
+                if affected_rows(result) != 1:
+                    continue
                 log_ticket_event(t["id"], "open", f"auto-escalated to high — open > {SLA_HOURS}h (SLA breach)")
                 record_ticket_escalated()
                 escalated.append({"ticket_id": t["id"], "title": t["title"], "previous_priority": t["priority"]})

@@ -1,5 +1,6 @@
 """Run once to set up Turso tables + seed data, and embed docs into Qdrant."""
 import os
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,57 +13,6 @@ from langchain_core.documents import Document
 
 # ── Turso ──────────────────────────────────────────────────────────────────
 
-DDL = [
-    """CREATE TABLE IF NOT EXISTS employees (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        department TEXT,
-        role TEXT,
-        manager TEXT,
-        leave_balance INTEGER,
-        email TEXT
-    )""",
-    """CREATE TABLE IF NOT EXISTS tickets (
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        description TEXT,
-        priority TEXT,
-        status TEXT,
-        created_at TEXT,
-        department TEXT,
-        resolved_by_kb INTEGER DEFAULT 0
-    )""",
-    """CREATE TABLE IF NOT EXISTS reports (
-        id TEXT PRIMARY KEY,
-        type TEXT,
-        period TEXT,
-        summary TEXT
-    )""",
-    """CREATE TABLE IF NOT EXISTS ticket_events (
-        id TEXT PRIMARY KEY,
-        ticket_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        note TEXT,
-        created_at TEXT
-    )""",
-    """CREATE TABLE IF NOT EXISTS ticket_comments (
-        id TEXT PRIMARY KEY,
-        ticket_id TEXT NOT NULL,
-        author TEXT NOT NULL,
-        comment TEXT NOT NULL,
-        created_at TEXT
-    )""",
-    """CREATE TABLE IF NOT EXISTS leave_requests (
-        id TEXT PRIMARY KEY,
-        employee_id TEXT NOT NULL,
-        employee_name TEXT,
-        days INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        requested_at TEXT,
-        decided_at TEXT,
-        decided_by TEXT
-    )""",
-]
 
 EMPLOYEES = [
     ("EMP001", "Priya Sharma",   "Engineering",  "Senior SWE",        "Rajesh Kumar",  18, "priya@nexus.io"),
@@ -96,17 +46,8 @@ REPORTS = [
     ("RPT006", "it",   "Q2 2025", "Tickets raised: 246. Avg resolution time: 5.8h. SLA breaches: 2 (0.8%). Top issues: laptop setup (26%), VPN (24%), software access (16%). Infra uptime: 99.9%."),
 ]
 
-print("Creating Turso tables...")
-for ddl in DDL:
-    execute(ddl)
-
-print("Applying migrations...")
-for stmt in MIGRATIONS:
-    try:
-        execute(stmt)
-    except Exception as e:
-        if "duplicate column" not in str(e).lower():
-            raise
+print("Creating Turso tables and applying migrations...")
+migrate()
 
 print("Seeding employees...")
 for emp in EMPLOYEES:
@@ -147,13 +88,19 @@ FAQ_DOCS = [
 
 print("Embedding docs into Qdrant...")
 embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+# Stable IDs per seed doc: re-running overwrites these points in place instead of duplicating them,
+# and the collection is no longer recreated, so documents added via ingest_docs.py or the API survive.
+seed_ids = [
+    str(uuid.uuid5(uuid.NAMESPACE_URL, f"nexus-seed:{doc.metadata['source']}:{i}"))
+    for i, doc in enumerate(FAQ_DOCS)
+]
 QdrantVectorStore.from_documents(
     FAQ_DOCS,
     embeddings,
+    ids=seed_ids,
     url=os.getenv("QDRANT_URL"),
     api_key=os.getenv("QDRANT_API_KEY"),
     collection_name="nexus_docs",
-    force_recreate=True,
 )
 print("Qdrant seeding done.")
 print("\nAll done. Run: uvicorn main:app --reload")

@@ -1,10 +1,13 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Annotated, Optional, Any
+from pydantic import BaseModel, Field, StringConstraints
+
+# Upper bounds keep a single request from sending megabytes of text to the LLM or the database.
+Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 
 
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, max_length=2000, strip_whitespace=True)
-    session_id: Optional[str] = None
+    question: Question
+    session_id: Optional[str] = Field(None, max_length=128)
 
 
 class AskResponse(BaseModel):
@@ -25,31 +28,31 @@ class TicketStatusUpdate(BaseModel):
 
 
 class EmployeeUpdate(BaseModel):
-    leave_balance: Optional[int] = None
-    role: Optional[str] = None
-    department: Optional[str] = None
+    leave_balance: Optional[int] = Field(None, ge=0)
+    role: Optional[str] = Field(None, max_length=200)
+    department: Optional[str] = Field(None, max_length=200)
 
 
 class ReportCreate(BaseModel):
-    type: str
-    period: str
-    summary: str
+    type: str = Field(..., max_length=50)
+    period: str = Field(..., max_length=50)
+    summary: str = Field(..., max_length=10_000)
 
 
 class TicketCommentCreate(BaseModel):
-    author: str
-    comment: str
+    author: str = Field(..., min_length=1, max_length=200)
+    comment: str = Field(..., min_length=1, max_length=5_000)
 
 
 class MeetingTranscript(BaseModel):
-    transcript: str = Field(..., min_length=1)
+    transcript: str = Field(..., min_length=1, max_length=60_000)
 
 
 class MarketingContentRequest(BaseModel):
-    topic: str = Field(..., min_length=1)
-    content_format: str = "social post"
+    topic: str = Field(..., min_length=1, max_length=1_000)
+    content_format: str = Field("social post", max_length=100)
 
 
 class RagDocumentCreate(BaseModel):
-    text: str = Field(..., min_length=1)
-    source: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=200_000)
+    source: str = Field(..., min_length=1, max_length=200)

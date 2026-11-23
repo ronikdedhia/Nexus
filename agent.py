@@ -1,7 +1,5 @@
-import os
 import re
 from langchain.agents import create_agent
-from langchain_groq import ChatGroq
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 
 from tools import (
@@ -19,6 +17,7 @@ from tools import (
 )
 from rag import rag_search
 from metrics import record_agent_call, record_tool_call
+from llm import get_llm
 
 SYSTEM_PROMPT = """You are Nexus, an enterprise AI assistant. You help employees with:
 - HR queries: leave policy, reimbursements, benefits, employee info, applying leave
@@ -35,6 +34,8 @@ Rules:
 - create_ticket checks the knowledge base first and may return a suggested self-serve answer instead
   of opening a ticket — surface that answer to the user, and only call create_ticket with
   force_create=True if they say it didn't help.
+- If a tool says an employee name matches more than one person, ask the user which one they mean.
+  Never guess between employees.
 - Before calling apply_leave, confirm the employee and number of days if not explicitly clear.
   Requests over a few days become pending and need manager approval — say so.
 - If no tool is relevant, answer from your knowledge and be honest about uncertainty.
@@ -43,17 +44,21 @@ Rules:
 _agent = None
 
 
+def _text(content) -> str:
+    """Message content can be a string or a list of content blocks depending on the model."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b if isinstance(b, str) else b.get("text", "") for b in content if isinstance(b, (str, dict)))
+    return str(content or "")
+
+
 def get_agent():
     global _agent
     if _agent is not None:
         return _agent
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=0,
-        api_key=os.getenv("GROQ_API_KEY"),
-    )
     _agent = create_agent(
-        llm,
+        get_llm(0),
         tools=[
             create_ticket,
             get_employee,
@@ -87,8 +92,8 @@ def run_agent(question: str, chat_history: list[BaseMessage]) -> dict:
     # last AIMessage with non-empty content is the final answer
     final_answer = ""
     for msg in reversed(all_messages):
-        if isinstance(msg, AIMessage) and msg.content:
-            final_answer = msg.content
+        if isinstance(msg, AIMessage) and _text(msg.content):
+            final_answer = _text(msg.content)
             break
 
     # find the last tool call name + result
@@ -97,12 +102,14 @@ def run_agent(question: str, chat_history: list[BaseMessage]) -> dict:
     for msg in reversed(all_messages):
         if isinstance(msg, ToolMessage):
             action_taken = getattr(msg, "name", None)
-            action_result = msg.content
+            action_result = _text(msg.content)
             break
 
     sources = None
     if action_taken == "rag_search" and isinstance(action_result, str):
-        sources = re.findall(r"\[([^\]]+)\]", action_result) or None
+        # rag_search formats each hit as "[source]: text"; only match that prefix, not brackets inside the text
+        found = re.findall(r"^\[([^\]]+)\]:", action_result, flags=re.MULTILINE)
+        sources = list(dict.fromkeys(found)) or None
 
     return {
         "answer": final_answer,

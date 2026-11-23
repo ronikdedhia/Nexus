@@ -32,6 +32,12 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
 
+  exportTicketsCsv: async () => {
+    const headers = API_KEY ? { "X-API-Key": API_KEY } : {};
+    const res = await fetch(`${BASE_URL}/tickets/export`, { headers });
+    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    return res.blob();
+  },
   getTicketComments: (id) => request(`/tickets/${id}/comments`),
 
   addTicketComment: (id, author, comment) =>

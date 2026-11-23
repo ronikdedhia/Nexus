@@ -74,6 +74,21 @@ export default function Tickets() {
     }
   }
 
+  // A plain <a href> can't send the X-API-Key header, so fetch the CSV and hand it to the browser.
+  async function handleExport() {
+    try {
+      const blob = await api.exportTicketsCsv();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "tickets.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   return (
     <div className="panel">
       <p className="chat-empty">To create a ticket, type your request in the Chat tab.</p>
@@ -86,9 +101,9 @@ export default function Tickets() {
             </option>
           ))}
         </select>
-        <a className="export-link" href={`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/tickets/export`}>
+        <button type="button" className="export-link" onClick={handleExport}>
           Export CSV
-        </a>
+        </button>
       </div>
 
       {error && <div className="chat-error">{error}</div>}

@@ -1,4 +1,5 @@
 import os
+import base64
 import requests
 from typing import Any
 
@@ -16,19 +17,36 @@ def _init():
         raise RuntimeError("TURSO_URL and TURSO_TOKEN must be set")
 
 
+def _wrap(v: Any) -> dict:
+    """Encode a Python value as a Hrana v2 value."""
+    if v is None:
+        return {"type": "null"}
+    if isinstance(v, bool):  # must come before int: bool is a subclass of int
+        return {"type": "integer", "value": "1" if v else "0"}
+    if isinstance(v, int):
+        return {"type": "integer", "value": str(v)}
+    if isinstance(v, float):
+        return {"type": "float", "value": v}  # Hrana floats are JSON numbers, not strings
+    return {"type": "text", "value": str(v)}
+
+
+def _unwrap(v: dict) -> Any:
+    """Decode a Hrana v2 value into the matching Python type."""
+    t = v.get("type")
+    if t == "null":
+        return None
+    if t == "integer":
+        return int(v["value"])
+    if t == "float":
+        return float(v["value"])
+    if t == "blob":
+        return base64.b64decode(v.get("base64", ""))
+    return v.get("value")
+
+
 def execute(sql: str, args: list[Any] = None) -> dict:
     if not _URL:
         _init()
-
-    def _wrap(v):
-        if v is None:
-            return {"type": "null"}
-        if isinstance(v, int):
-            return {"type": "integer", "value": str(v)}
-        if isinstance(v, float):
-            return {"type": "float", "value": str(v)}
-        return {"type": "text", "value": str(v)}
-
     payload = {
         "requests": [
             {
@@ -54,6 +72,64 @@ def execute(sql: str, args: list[Any] = None) -> dict:
     return result["response"]["result"]
 
 
+def affected_rows(result: dict) -> int:
+    return int(result.get("affected_row_count", 0) or 0)
+
+
+# Base tables (created by seed.py). MIGRATIONS below catches up databases seeded by older versions.
+SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS employees (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        department TEXT,
+        role TEXT,
+        manager TEXT,
+        leave_balance INTEGER,
+        email TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS tickets (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        description TEXT,
+        priority TEXT,
+        status TEXT,
+        created_at TEXT,
+        department TEXT,
+        resolved_by_kb INTEGER DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY,
+        type TEXT,
+        period TEXT,
+        summary TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS ticket_events (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS ticket_comments (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        author TEXT NOT NULL,
+        comment TEXT NOT NULL,
+        created_at TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS leave_requests (
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        employee_name TEXT,
+        days INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        requested_at TEXT,
+        decided_at TEXT,
+        decided_by TEXT
+    )""",
+]
+
+
 MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN department TEXT",
     "ALTER TABLE tickets ADD COLUMN resolved_by_kb INTEGER DEFAULT 0",
@@ -75,7 +151,9 @@ MIGRATIONS = [
 
 
 def migrate():
-    """Idempotent schema catch-up for already-seeded databases."""
+    """Idempotent: creates missing tables, then adds columns that older seeded databases lack."""
+    for stmt in SCHEMA:
+        execute(stmt)
     for stmt in MIGRATIONS:
         try:
             execute(stmt)
@@ -94,7 +172,4 @@ def ping() -> dict:
 
 def rows_to_dicts(result: dict) -> list[dict]:
     cols = [c["name"] for c in result.get("cols", [])]
-    out = []
-    for row in result.get("rows", []):
-        out.append(dict(zip(cols, [v.get("value") for v in row])))
-    return out
+    return [dict(zip(cols, [_unwrap(v) for v in row])) for row in result.get("rows", [])]

@@ -1,0 +1,37 @@
+# Runs the SLA sweep and daily digest from outside the app. Use this when the backend runs on a host
+# that sleeps when idle (e.g. Render free tier), where the in-process scheduler never fires.
+# Setup: add repo secrets NEXUS_URL (e.g. https://your-app.onrender.com) and NEXUS_ADMIN_API_KEY,
+# and set NEXUS_ENABLE_SCHEDULER=false on the backend so jobs don't run twice.
+# Does nothing until both secrets exist.
+name: ops-cron
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # SLA sweep
+    - cron: "0 9 * * *"      # daily digest (09:00 UTC)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NEXUS_URL: ${{ secrets.NEXUS_URL }}
+      NEXUS_ADMIN_API_KEY: ${{ secrets.NEXUS_ADMIN_API_KEY }}
+    steps:
+      - name: Skip when not configured
+        id: check
+        run: |
+          if [ -z "$NEXUS_URL" ] || [ -z "$NEXUS_ADMIN_API_KEY" ]; then
+            echo "NEXUS_URL / NEXUS_ADMIN_API_KEY secrets not set; skipping."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: SLA sweep
+        if: steps.check.outputs.configured == 'true'
+        # --max-time 120 covers a sleeping host's cold start
+        run: curl -fsS --max-time 120 -X POST -H "X-API-Key: $NEXUS_ADMIN_API_KEY" "$NEXUS_URL/tickets/sla-breaches/escalate"
+      - name: Daily digest
+        if: steps.check.outputs.configured == 'true' && (github.event.schedule == '0 9 * * *' || github.event_name == 'workflow_dispatch')
+        run: curl -fsS --max-time 120 -X POST -H "X-API-Key: $NEXUS_ADMIN_API_KEY" "$NEXUS_URL/ops/digest"
